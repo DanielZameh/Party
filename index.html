@@ -1,0 +1,304 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Truth or Dare — Party</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link href="style.css" rel="stylesheet" />
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="data.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div class="container">
+        <div class="panel left">
+          <div class="logo">
+            <div class="dot">TD</div>
+            <div>
+              <div class="title">Truth or Dare — Party</div>
+              <div class="sub">Make rooms, play with friends, switch Arabic/English.</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <label class="hint">Your name</label>
+            <input id="name" class="input" placeholder="e.g. Ahmed / Sara / Dan" />
+          </div>
+
+          <div class="row">
+            <label class="hint">Language</label>
+            <select id="language" class="select">
+              <option value="en">English</option>
+              <option value="ar">العربية</option>
+            </select>
+          </div>
+
+          <div class="row">
+            <label class="hint">Layer / Mode</label>
+            <select id="layer" class="select">
+              <option value="clean">Clean (Safe)</option>
+              <option value="wild">Wild (Spicy)</option>
+              <option value="mature">Mature (Adult)</option>
+            </select>
+            <div class="footer-note">Mature is optional. Host can enforce safe-only play.</div>
+          </div>
+
+          <div style="display:flex; gap:10px; margin-top:12px;">
+            <button id="createBtn" class="btn">Create Room</button>
+            <button id="joinBtn" class="btn small">Join Room</button>
+          </div>
+
+          <div id="roomSetup" style="margin-top:12px; display:none;">
+            <div class="hint">Room code</div>
+            <div id="roomCode" class="room-code">—</div>
+            <div style="margin-top:8px; display:flex; gap:8px">
+              <button id="startBtn" class="btn small">Start Round</button>
+              <button id="readyBtn" class="btn small">Toggle Ready</button>
+              <button id="leaveBtn" class="btn small">Leave</button>
+            </div>
+          </div>
+
+          <div style="margin-top:18px;">
+            <div class="hint">Quick options</div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button id="cleanPreset" class="choice">Clean</button>
+              <button id="wildPreset" class="choice">Wild</button>
+              <button id="maturePreset" class="choice">Mature</button>
+            </div>
+            <div class="footer-note">Host chooses prompts. Everyone sees them at once.</div>
+          </div>
+
+        </div>
+
+        <div class="panel right">
+          <div class="header-game">
+            <div>
+              <div style="font-weight:800; font-size:18px" id="roomTitle">Lobby</div>
+              <div class="hint" id="subTitle">Not in a room yet.</div>
+            </div>
+            <div style="display:flex; gap:10px; align-items:center">
+              <div class="hint">Pick: </div>
+              <div class="choice-grid">
+                <div id="pickTruth" class="choice">Truth</div>
+                <div id="pickDare" class="choice">Dare</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="board">
+            <div id="promptArea" class="prompt">Create or join a room to start the insanity. Host picks prompts or randomize.</div>
+
+            <div class="controls">
+              <div style="flex:1">
+                <label class="hint">Selected by (host)</label>
+                <div id="selectedBy" class="hint">—</div>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button id="randomBtn" class="btn small">Random Pick</button>
+                <button id="copyCodeBtn" class="btn small">Copy Room</button>
+              </div>
+            </div>
+
+            <div class="side">
+              <div class="players panel" style="flex:0.6">
+                <div style="font-weight:800; margin-bottom:8px">Players</div>
+                <div id="playersList"></div>
+              </div>
+
+              <div class="chat panel" style="flex:1">
+                <div style="font-weight:800; margin-bottom:8px">Chat</div>
+                <div id="messages" class="messages"></div>
+                <div class="input-row">
+                  <input id="chatInput" class="input" placeholder="Say something..." />
+                  <button id="sendChat" class="btn small">Send</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    // front-end logic
+    const socket = io();
+    const gd = window.GameData;
+    let currentRoom = null;
+    let isHost = false;
+
+    // elements
+    const nameEl = document.getElementById('name');
+    const languageEl = document.getElementById('language');
+    const layerEl = document.getElementById('layer');
+    const createBtn = document.getElementById('createBtn');
+    const joinBtn = document.getElementById('joinBtn');
+    const roomSetup = document.getElementById('roomSetup');
+    const roomCodeEl = document.getElementById('roomCode');
+    const peopleList = document.getElementById('playersList');
+    const promptArea = document.getElementById('promptArea');
+    const startBtn = document.getElementById('startBtn');
+    const readyBtn = document.getElementById('readyBtn');
+    const leaveBtn = document.getElementById('leaveBtn');
+    const pickTruth = document.getElementById('pickTruth');
+    const pickDare = document.getElementById('pickDare');
+    const randomBtn = document.getElementById('randomBtn');
+    const selectedBy = document.getElementById('selectedBy');
+    const messagesEl = document.getElementById('messages');
+    const chatInput = document.getElementById('chatInput');
+    const sendChat = document.getElementById('sendChat');
+    const roomTitle = document.getElementById('roomTitle');
+    const subTitle = document.getElementById('subTitle');
+    const copyCodeBtn = document.getElementById('copyCodeBtn');
+
+    // helpers
+    function logChat(name, msg){
+      const div = document.createElement('div');
+      div.className = 'msg';
+      div.innerHTML = '<strong>'+escapeHtml(name)+'</strong>: '+escapeHtml(msg);
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+    function escapeHtml(s){ return (s+'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+    createBtn.addEventListener('click', ()=>{
+      const name = nameEl.value.trim() || 'Player';
+      const language = languageEl.value;
+      const layer = layerEl.value;
+      socket.emit('createRoom', { name, language, layer });
+    });
+
+    joinBtn.addEventListener('click', async ()=>{
+      const name = nameEl.value.trim() || 'Player';
+      const roomId = prompt('Enter room code (ex: AB12C)').toUpperCase();
+      if (!roomId) return;
+      socket.emit('joinRoom', { roomId, name });
+    });
+
+    socket.on('roomCreated', ({roomId})=>{
+      currentRoom = roomId;
+      isHost = true;
+      roomSetup.style.display = 'block';
+      roomCodeEl.textContent = roomId;
+      roomTitle.textContent = 'Room: '+roomId;
+      subTitle.textContent = 'You are host — pick prompts or randomize.';
+    });
+
+    socket.on('roomUpdate', (room) => {
+      // update UI
+      if (!currentRoom) currentRoom = Object.keys(room.players)[0] ? currentRoom : currentRoom;
+      roomCodeEl.textContent = Object.keys(room.players).length ? (currentRoom || '—') : '—';
+      // if you are in this room, set currentRoom and isHost
+      if (socket.id in room.players) {
+        currentRoom = Object.keys(socket.rooms).find(r=>r!==socket.id) || currentRoom;
+        isHost = (room.hostId === socket.id);
+        roomSetup.style.display = 'block';
+        roomTitle.textContent = 'Room: ' + (currentRoom || '—');
+        subTitle.textContent = isHost ? 'You are host' : 'Joined: play along';
+      }
+      // show players
+      peopleList.innerHTML = '';
+      Object.entries(room.players).forEach(([sid, p])=>{
+        const el = document.createElement('div');
+        el.className = 'player';
+        el.innerHTML = '<div class="avatar">'+(p.name?.slice(0,2).toUpperCase()||'P')+'</div><div style="flex:1"><div style="font-weight:700">'+escapeHtml(p.name)+'</div><div class="hint">'+(p.ready? 'Ready':'Not ready')+'</div></div>' + (room.hostId === sid? '<div class="hint">Host</div>':'');
+        peopleList.appendChild(el);
+      });
+    });
+
+    socket.on('errorJoin', (msg) => alert(msg));
+
+    startBtn.addEventListener('click', ()=>{
+      if (!currentRoom) return alert('No room');
+      socket.emit('startRound', { roomId: currentRoom });
+    });
+
+    readyBtn.addEventListener('click', ()=>{
+      if (!currentRoom) return;
+      socket.emit('toggleReady', { roomId: currentRoom });
+    });
+
+    leaveBtn.addEventListener('click', ()=>{
+      if (!currentRoom) return;
+      socket.emit('leaveRoom', { roomId: currentRoom });
+      currentRoom = null; isHost = false;
+      roomSetup.style.display = 'none';
+      roomCodeEl.textContent = '—';
+      roomTitle.textContent = 'Lobby';
+      subTitle.textContent = 'Not in a room yet.';
+    });
+
+    // user picks truth/dare and host broadcasts selected prompt
+    let pickType = 'truth';
+    pickTruth.onclick = ()=>{ pickType='truth'; pickTruth.classList.add('active'); pickDare.classList.remove('active'); };
+    pickDare.onclick = ()=>{ pickType='dare'; pickDare.classList.add('active'); pickTruth.classList.remove('active'); };
+    pickTruth.click();
+
+    function getRandomFrom(dataArr, seed) {
+      if (!Array.isArray(dataArr) || dataArr.length===0) return {text:'No prompts found'};
+      // simple seeded-ish pick using time+seed
+      const idx = Math.floor(Math.abs(Math.sin((seed||Date.now()) + Math.random()) * 10000)) % dataArr.length;
+      return { text: dataArr[idx] };
+    }
+
+    randomBtn.addEventListener('click', ()=>{
+      if (!currentRoom) return alert('Join or create a room first');
+      // host picks and broadcasts selectedPrompt
+      const lang = languageEl.value;
+      const layer = layerEl.value;
+      const items = gd.prompts?.[lang]?.[layer]?.[pickType] || [];
+      const sel = getRandomFrom(items);
+      const promptObj = { type: pickType, language: lang, layer, text: sel.text };
+      socket.emit('selectedPrompt', { roomId: currentRoom, promptObj });
+    });
+
+    socket.on('newPrompt', ({prompt, from})=>{
+      selectedBy.textContent = from || 'Host';
+      // display large
+      promptArea.textContent = prompt.text || '—';
+    });
+
+    socket.on('roundStarted', ({round, seed})=>{
+      // optional visual: flash board
+      promptArea.style.opacity = 0.7;
+      setTimeout(()=>promptArea.style.opacity = 1, 200);
+    });
+
+    // Chat
+    sendChat.addEventListener('click', ()=>{
+      const txt = chatInput.value.trim();
+      if (!txt || !currentRoom) return;
+      socket.emit('chat', { roomId: currentRoom, msg: txt });
+      chatInput.value = '';
+    });
+    chatInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') sendChat.click(); });
+
+    socket.on('chatMessage', ({name, msg})=>{
+      logChat(name, msg);
+    });
+
+    copyCodeBtn.addEventListener('click', ()=>{
+      if (!currentRoom) return;
+      navigator.clipboard?.writeText(currentRoom).then(()=> alert('Room code copied: '+currentRoom));
+    });
+
+    // quick presets
+    document.getElementById('cleanPreset').onclick = ()=>{ layerEl.value='clean'; alert('Layer set to Clean') };
+    document.getElementById('wildPreset').onclick = ()=>{ layerEl.value='wild'; alert('Layer set to Wild') };
+    document.getElementById('maturePreset').onclick = ()=>{ layerEl.value='mature'; alert('Layer set to Mature (use responsibly)') };
+
+    // quick join via url param ?room=AB12C
+    (function checkUrl(){
+      const params = new URLSearchParams(location.search);
+      const r = params.get('room');
+      if (r) {
+        const name = nameEl.value.trim() || 'Player';
+        socket.emit('joinRoom', { roomId: r.toUpperCase(), name });
+      }
+    })();
+
+    // nice small UX: welcome message
+    logChat('System','Welcome! Create a room then share the code with friends. Host picks prompts or randomize.');
+    </script>
+  </body>
+</html>
